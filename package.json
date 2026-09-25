@@ -1,0 +1,14 @@
+{
+  "name": "fleet-command-vercel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Fleet Command - Strait of Hormuz Crisis Operations System",
+  "scripts": {
+    "install:all": "cd client && npm install && cd ../server && npm install",
+    "build": "cd client && npm install && npm run build",
+    "start": "cd server && npm start",
+    "dev": "cd server && npm run dev"
+  },
+  "dependencies": {},
+  "devDependencies": {}
+}
