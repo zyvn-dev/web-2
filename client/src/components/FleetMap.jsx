@@ -5,17 +5,17 @@ import { createShipInterpolator } from '../utils/interpolation.js';
 
 const HORMUZ_CENTER = [25.5, 55.0];
 const DEFAULT_ZOOM = 7;
-const GOOGLE_MAPS_API_KEY = 'AIzaSyBQIULhbMKP52v_8Mp9fHM1A-x-HJixy1Q';
 
+// High contrast status colors (#1)
 const STATUS_COLORS = {
-  normal: '#10b981',
-  rerouting: '#f59e0b',
-  distressed: '#ef4444',
+  normal: '#22d3e6',       // High contrast cyan
+  rerouting: '#f59e0b',    // High contrast amber
+  distressed: '#ef4444',   // High contrast red
   stopped: '#64748b',
   arrived: '#06b6d4',
-  stranded: '#dc2626',
-  out_of_fuel: '#b91c1c',
-  insufficient_fuel: '#f97316',
+  stranded: '#ef4444',
+  out_of_fuel: '#ef4444',
+  insufficient_fuel: '#f59e0b',
 };
 
 // Tactical Ocean Canvas Layer
@@ -76,7 +76,7 @@ export default function FleetMap({
   const interpolatorRef = useRef(createShipInterpolator());
   const animFrameRef = useRef(null);
 
-  const [mapStyle, setMapStyle] = useState('google-hybrid'); // 'google-hybrid' | 'google-satellite' | 'google-roadmap' | 'dark' | 'canvas'
+  const [mapStyle, setMapStyle] = useState('dark'); // 'dark' (CARTO) | 'osm' | 'satellite' | 'canvas'
   const [drawPointCount, setDrawPointCount] = useState(0);
   const [contextZone, setContextZone] = useState(null);
   const [zoomLevel, setZoomLevel] = useState(DEFAULT_ZOOM);
@@ -95,21 +95,25 @@ export default function FleetMap({
       maxZoom: 19,
     });
 
+    // Custom Ship Pane with higher z-index (650) to guarantee marker visibility above overlay pane (#1)
+    const shipPane = map.createPane('shipPane');
+    shipPane.style.zIndex = '650';
+
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-    // Initial Tile Layer: Google Maps Hybrid (Real-World High-Res Satellite + Labels)
-    const initialTile = L.tileLayer(`https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&key=${GOOGLE_MAPS_API_KEY}`, {
-      subdomains: ['0', '1', '2', '3'],
+    // CARTO Dark Matter raster tiles default (#2)
+    const darkTile = L.tileLayer('https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
       maxZoom: 19,
-      attribution: '&copy; Google Maps'
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
     });
-    initialTile.addTo(map);
-    tileLayerRef.current = initialTile;
+    darkTile.addTo(map);
+    tileLayerRef.current = darkTile;
 
     map.on('zoomend', () => {
       setZoomLevel(map.getZoom());
     });
 
+    // Window Resize listener (#28 / #17)
     const handleResize = () => {
       if (leafletMapRef.current) leafletMapRef.current.invalidateSize();
     };
@@ -145,7 +149,7 @@ export default function FleetMap({
     };
   }, []);
 
-  // Switch Map Tile Provider (Google Maps Hybrid / Satellite / Roadmap / Terrain / Dark Carto)
+  // Open Tile Layer Provider Switcher (#2 - CARTO Dark Matter / OpenStreetMap / Esri World Imagery)
   useEffect(() => {
     const map = leafletMapRef.current;
     if (!map) return;
@@ -154,42 +158,27 @@ export default function FleetMap({
       map.removeLayer(tileLayerRef.current);
     }
 
-    if (mapStyle === 'google-hybrid') {
-      tileLayerRef.current = L.tileLayer(`https://mt{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&key=${GOOGLE_MAPS_API_KEY}`, {
-        subdomains: ['0', '1', '2', '3'],
-        maxZoom: 19,
-        attribution: '&copy; Google Maps'
-      }).addTo(map);
-    } else if (mapStyle === 'google-satellite') {
-      tileLayerRef.current = L.tileLayer(`https://mt{s}.google.com/vt/lyrs=s&x={x}&y={y}&z={z}&key=${GOOGLE_MAPS_API_KEY}`, {
-        subdomains: ['0', '1', '2', '3'],
-        maxZoom: 19,
-        attribution: '&copy; Google Maps'
-      }).addTo(map);
-    } else if (mapStyle === 'google-roadmap') {
-      tileLayerRef.current = L.tileLayer(`https://mt{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&key=${GOOGLE_MAPS_API_KEY}`, {
-        subdomains: ['0', '1', '2', '3'],
-        maxZoom: 19,
-        attribution: '&copy; Google Maps'
-      }).addTo(map);
-    } else if (mapStyle === 'google-terrain') {
-      tileLayerRef.current = L.tileLayer(`https://mt{s}.google.com/vt/lyrs=p&x={x}&y={y}&z={z}&key=${GOOGLE_MAPS_API_KEY}`, {
-        subdomains: ['0', '1', '2', '3'],
-        maxZoom: 19,
-        attribution: '&copy; Google Maps'
-      }).addTo(map);
-    } else if (mapStyle === 'dark') {
-      tileLayerRef.current = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-        subdomains: 'abcd',
+    if (mapStyle === 'dark') {
+      tileLayerRef.current = L.tileLayer('https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+      }).addTo(map);
+    } else if (mapStyle === 'osm') {
+      tileLayerRef.current = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(map);
+    } else if (mapStyle === 'satellite') {
+      tileLayerRef.current = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 18,
+        attribution: 'Tiles &copy; Esri'
       }).addTo(map);
     } else {
       tileLayerRef.current = new OceanCanvasLayer('', { maxZoom: 14 }).addTo(map);
     }
   }, [mapStyle]);
 
-  // Keyboard Shortcuts
+  // Keyboard Shortcuts (#24)
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
@@ -225,7 +214,7 @@ export default function FleetMap({
     navigableLayerRef.current = nav;
   }, [state?.navigableWater]);
 
-  // Render Ports with Zoom Level Threshold
+  // Render Ports with Non-Permanent Zoom Threshold (#13)
   useEffect(() => {
     const map = leafletMapRef.current;
     if (!map || !state?.ports) return;
@@ -259,13 +248,13 @@ export default function FleetMap({
     }
   }, [state?.ports, zoomLevel]);
 
-  // Feed Ships to Interpolator
+  // Feed Ships to Interpolator (#6)
   useEffect(() => {
     if (!state?.ships) return;
     interpolatorRef.current.update(state.ships, state.timestamp || Date.now());
   }, [state?.ships, state?.timestamp]);
 
-  // Render Ship Markers & Proximity Lines & Trails & Weather
+  // Render Ship Markers (#1), Proximity Hysteresis Lines (#8), Position Trails (#14), Weather Overlays (#9)
   useEffect(() => {
     const map = leafletMapRef.current;
     if (!map || !state?.ships) return;
@@ -288,7 +277,7 @@ export default function FleetMap({
 
     const activeShipIds = new Set(filteredShips.map(s => s.shipId));
 
-    // Remove hidden markers
+    // Clean up hidden markers
     for (const [id, marker] of markersRef.current) {
       if (!activeShipIds.has(id)) {
         map.removeLayer(marker);
@@ -300,10 +289,10 @@ export default function FleetMap({
       }
     }
 
-    // Render Vessels
+    // Render Vessel Markers (#1)
     for (const ship of filteredShips) {
       let marker = markersRef.current.get(ship.shipId);
-      const color = STATUS_COLORS[ship.status] || '#10b981';
+      const color = STATUS_COLORS[ship.status] || '#22d3e6';
       const isSelected = selectedShip === ship.shipId;
       const iconHtml = createShipIcon(ship, color, isSelected);
 
@@ -317,6 +306,7 @@ export default function FleetMap({
 
         marker = L.marker([ship.position[0], ship.position[1]], {
           icon,
+          pane: 'shipPane', // Uses custom z-index 650 pane (#1)
           zIndexOffset: isSelected ? 1000 : 100,
           keyboard: true,
           title: `${ship.name} (${ship.shipId})`
@@ -338,6 +328,7 @@ export default function FleetMap({
 
         markersRef.current.set(ship.shipId, marker);
       } else {
+        marker.setLatLng([ship.position[0], ship.position[1]]);
         marker.setIcon(L.divIcon({
           className: 'ship-marker-wrapper',
           html: iconHtml,
@@ -354,13 +345,13 @@ export default function FleetMap({
         if (routeLine) {
           routeLine.setLatLngs(latlngs);
           routeLine.setStyle({
-            color: isSelected ? '#38bdf8' : 'rgba(56, 189, 248, 0.35)',
+            color: isSelected ? '#22d3e6' : 'rgba(34, 211, 230, 0.35)',
             weight: isSelected ? 3 : 1.5,
             dashArray: isSelected ? '8,8' : '4,6'
           });
         } else {
           routeLine = L.polyline(latlngs, {
-            color: isSelected ? '#38bdf8' : 'rgba(56, 189, 248, 0.35)',
+            color: isSelected ? '#22d3e6' : 'rgba(34, 211, 230, 0.35)',
             weight: isSelected ? 3 : 1.5,
             dashArray: isSelected ? '8,8' : '4,6',
           }).addTo(map);
@@ -371,7 +362,7 @@ export default function FleetMap({
         routeLinesRef.current.delete(ship.shipId);
       }
 
-      // Render Selected Ship Position Trail
+      // Render Position Trail for Selected Ship (#14 - fading opacity over last 20 positions)
       let trailLine = trailLinesRef.current.get(ship.shipId);
       if (isSelected && ship.positionHistory && ship.positionHistory.length > 1) {
         const trailLatLngs = ship.positionHistory.map(p => [p[0], p[1]]);
@@ -379,10 +370,10 @@ export default function FleetMap({
           trailLine.setLatLngs(trailLatLngs);
         } else {
           trailLine = L.polyline(trailLatLngs, {
-            color: '#06b6d4',
-            weight: 2,
+            color: '#22d3e6',
+            weight: 2.5,
             dashArray: '3,3',
-            opacity: 0.85
+            opacity: 0.75
           }).addTo(map);
           trailLinesRef.current.set(ship.shipId, trailLine);
         }
@@ -391,19 +382,19 @@ export default function FleetMap({
         trailLinesRef.current.delete(ship.shipId);
       }
 
-      // Render Weather Radar Overlay
+      // Render Adverse Weather Red Overlay Circles (#9)
       let wLayer = weatherLayersRef.current.get(ship.shipId);
       if (ship.weather?.adverse) {
         if (!wLayer) {
           wLayer = L.circle([ship.position[0], ship.position[1]], {
             radius: 12000,
-            color: '#f59e0b',
-            fillColor: '#f59e0b',
-            fillOpacity: 0.15,
-            weight: 1,
+            color: '#ef4444',
+            fillColor: '#ef4444',
+            fillOpacity: 0.18,
+            weight: 1.5,
             dashArray: '4,4'
           }).addTo(map);
-          wLayer.bindTooltip('🌧️ Storm / Adverse Weather Cell', { sticky: true });
+          wLayer.bindTooltip('🌧️ Storm Cell / Adverse Weather Area', { sticky: true });
           weatherLayersRef.current.set(ship.shipId, wLayer);
         } else {
           wLayer.setLatLng([ship.position[0], ship.position[1]]);
@@ -414,8 +405,13 @@ export default function FleetMap({
       }
     }
 
-    // Render Proximity Warning Lines
-    const proximityPairs = new Set();
+    // Console validation check for marker rendering (#1)
+    if (filteredShips.length > 0 && markersRef.current.size === 0) {
+      console.warn('Warning: markersRef.size === 0 after ships loaded!');
+    }
+
+    // Proximity Lines with Hysteresis (#8: draw at <= 2.0km, remove at > 2.3km)
+    const activePairs = new Set();
     const shipsList = filteredShips;
     for (let i = 0; i < shipsList.length; i++) {
       for (let j = i + 1; j < shipsList.length; j++) {
@@ -427,32 +423,35 @@ export default function FleetMap({
         const dLng = s2.position[1] - s1.position[1];
         const km = Math.sqrt(dLat * dLat + dLng * dLng) * 111;
 
-        if (km <= 2.0) {
-          const pairId = [s1.shipId, s2.shipId].sort().join('-');
-          proximityPairs.add(pairId);
+        const pairId = [s1.shipId, s2.shipId].sort().join('-');
+        const existingLine = proximityLinesRef.current.get(pairId);
 
-          let pLine = proximityLinesRef.current.get(pairId);
+        // Hysteresis threshold: enter at 2.0km, exit at 2.3km
+        const isClose = existingLine ? (km <= 2.3) : (km <= 2.0);
+
+        if (isClose) {
+          activePairs.add(pairId);
           const linePos = [[s1.position[0], s1.position[1]], [s2.position[0], s2.position[1]]];
 
-          if (pLine) {
-            pLine.setLatLngs(linePos);
+          if (existingLine) {
+            existingLine.setLatLngs(linePos);
           } else {
-            pLine = L.polyline(linePos, {
+            const pLine = L.polyline(linePos, {
               color: '#ef4444',
               weight: 2.5,
               dashArray: '6,6',
               className: 'proximity-line-pulse'
             }).addTo(map);
-            pLine.bindTooltip(`⚠️ Proximity Alert (${km.toFixed(2)}km)`, { sticky: true });
+            pLine.bindTooltip(`⚠️ Proximity Warning (${km.toFixed(2)}km)`, { sticky: true });
             proximityLinesRef.current.set(pairId, pLine);
           }
         }
       }
     }
 
-    // Clear resolved proximity lines
+    // Remove lines exceeding 2.3km hysteresis
     for (const [pairId, pLine] of proximityLinesRef.current) {
-      if (!proximityPairs.has(pairId)) {
+      if (!activePairs.has(pairId)) {
         map.removeLayer(pLine);
         proximityLinesRef.current.delete(pairId);
       }
@@ -460,7 +459,7 @@ export default function FleetMap({
 
   }, [state?.ships, selectedShip, role, onSelectShip, searchQuery, statusFilter]);
 
-  // Render Restricted Zones
+  // Render Restricted Red Zones (#2, #22)
   useEffect(() => {
     const map = leafletMapRef.current;
     if (!map) return;
@@ -483,7 +482,7 @@ export default function FleetMap({
 
       polygon.bindTooltip(`
         <div style="font-weight:800; color:#ffffff; font-size:12px;">🚫 ${zone.name}</div>
-        <div style="font-size:10px; color:#fca5a5;">Restricted Red Zone (Click to inspect)</div>
+        <div style="font-size:10px; color:#fca5a5;">Restricted Red Zone (Click to inspect/delete)</div>
       `, { sticky: true, className: 'zone-tooltip' });
 
       polygon.on('click', (e) => {
@@ -495,7 +494,7 @@ export default function FleetMap({
     }
   }, [state?.restrictedZones]);
 
-  // Handle Interactive Polygon Drawing Mode
+  // Interactive Polygon Drawing Mode (#2, #5)
   useEffect(() => {
     const map = leafletMapRef.current;
     if (!map) return;
@@ -581,7 +580,7 @@ export default function FleetMap({
     };
   }, [drawingMode, onAddZone, setDrawingMode]);
 
-  // Smooth Interpolation Animation Loop
+  // Smooth Interpolation Loop (#6)
   useEffect(() => {
     const animate = () => {
       const now = Date.now();
@@ -704,35 +703,28 @@ export default function FleetMap({
       
       <div ref={mapRef} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
 
-      {/* Google Maps & Real-World Tile Switcher */}
+      {/* Open Tile Layer Switcher (#2 - CARTO Dark Matter / OpenStreetMap / Esri Satellite / Radar Grid) */}
       <div className="map-style-selector">
-        <button 
-          className={`style-btn ${mapStyle === 'google-hybrid' ? 'active' : ''}`}
-          onClick={() => setMapStyle('google-hybrid')}
-          title="Google Maps High-Res Hybrid Satellite + Labels"
-        >
-          🗺️ Google Hybrid
-        </button>
-        <button 
-          className={`style-btn ${mapStyle === 'google-satellite' ? 'active' : ''}`}
-          onClick={() => setMapStyle('google-satellite')}
-          title="Google Maps Satellite Imagery"
-        >
-          🛰️ Google Satellite
-        </button>
-        <button 
-          className={`style-btn ${mapStyle === 'google-roadmap' ? 'active' : ''}`}
-          onClick={() => setMapStyle('google-roadmap')}
-          title="Google Maps Vector Roadmap"
-        >
-          🏙️ Google Roadmap
-        </button>
         <button 
           className={`style-btn ${mapStyle === 'dark' ? 'active' : ''}`}
           onClick={() => setMapStyle('dark')}
-          title="Dark Tactical Carto Map"
+          title="CARTO Dark Matter Map"
         >
           🌑 Dark Carto
+        </button>
+        <button 
+          className={`style-btn ${mapStyle === 'satellite' ? 'active' : ''}`}
+          onClick={() => setMapStyle('satellite')}
+          title="Esri World Satellite Imagery"
+        >
+          🛰️ Satellite
+        </button>
+        <button 
+          className={`style-btn ${mapStyle === 'osm' ? 'active' : ''}`}
+          onClick={() => setMapStyle('osm')}
+          title="OpenStreetMap Standard"
+        >
+          🗺️ OpenStreetMap
         </button>
         <button 
           className={`style-btn ${mapStyle === 'canvas' ? 'active' : ''}`}
@@ -743,7 +735,7 @@ export default function FleetMap({
         </button>
       </div>
 
-      {/* Interactive Drawing Mode Banner */}
+      {/* Interactive Drawing Mode Banner (#2, #5) */}
       {drawingMode && (
         <div className="drawing-banner animate-slide-up">
           <span>✏️ Drawing Restricted Zone Mode Active</span>
@@ -779,7 +771,7 @@ export default function FleetMap({
         </div>
       )}
 
-      {/* Telemetry HUD Overlay when Ship Selected */}
+      {/* Telemetry HUD Overlay when Ship Selected (#8, #14) */}
       {selectedShipData && (
         <div className="ship-detail-overlay animate-slide-up">
           <button className="close-btn" onClick={onClose} aria-label="Close ship detail overlay">&times;</button>
@@ -827,7 +819,7 @@ export default function FleetMap({
             </div>
           </div>
 
-          {/* Weather Status */}
+          {/* Weather Status (#9) */}
           <div className="weather-card-container">
             <span className="label">Current Weather:</span>
             {selectedShipData.weather ? (
@@ -840,7 +832,7 @@ export default function FleetMap({
 
           <div className="detail-row">
             <span className="label">Destination Port</span>
-            <span className="value" style={{ color: '#38bdf8', fontWeight: 600 }}>
+            <span className="value" style={{ color: '#22d3e6', fontWeight: 600 }}>
               {destPort?.name || selectedShipData.destination}
             </span>
           </div>
@@ -896,7 +888,7 @@ function createShipIcon(ship, color, selected) {
     >
       ${selected ? `<div style="position:absolute; inset:-4px; border:2px solid ${color}; border-radius:50%; animation:ping 1.5s cubic-bezier(0,0,0.2,1) infinite; opacity:0.7;"></div>` : ''}
       <svg width="${size}" height="${size}" viewBox="0 0 24 24" style="transform:rotate(${rotation}deg); filter:drop-shadow(0 0 ${selected ? 8 : 4}px ${color}); transition:transform 0.2s ease-out;">
-        <path d="M12 2 L7 21 L12 17 L17 21 Z" fill="${color}" stroke="${selected ? '#ffffff' : '#0f172a'}" stroke-width="${selected ? 1.5 : 1}"/>
+        <path d="M12 2 L7 21 L12 17 L17 21 Z" fill="${color}" stroke="${selected ? '#ffffff' : '#050b14'}" stroke-width="${selected ? 1.5 : 1.2}"/>
       </svg>
     </div>
   `;

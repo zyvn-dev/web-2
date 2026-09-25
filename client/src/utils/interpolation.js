@@ -1,5 +1,5 @@
-const MAX_SPEED_KMH = 80;
-const MAX_JUMP_KM = MAX_SPEED_KMH / 3600;
+const MAX_SPEED_KTS = 50;
+const MAX_JUMP_KM_PER_MS = (MAX_SPEED_KTS * 1.852) / 3600000;
 
 export function interpolateAngle(prevAngle, nextAngle, t) {
   let diff = (nextAngle - prevAngle) % 360;
@@ -13,22 +13,23 @@ export function interpolatePosition(prevPos, nextPos, prevTime, nextTime, curren
   const duration = nextTime - prevTime;
   if (duration <= 0) return nextPos;
 
-  const t = Math.min(1, Math.max(0, (currentTime - prevTime) / duration));
+  // Render at currentTime - 250ms for smooth 60fps buffering
+  const renderTime = currentTime - 250;
+  const t = Math.min(1, Math.max(0, (renderTime - prevTime) / duration));
 
   const dlat = nextPos[0] - prevPos[0];
   const dlng = nextPos[1] - prevPos[1];
   const degDist = Math.sqrt(dlat * dlat + dlng * dlng);
   const kmDist = degDist * 111;
 
-  if (kmDist > MAX_JUMP_KM * duration) {
+  // Max speed clamping to prevent teleporting
+  if (kmDist > MAX_JUMP_KM_PER_MS * duration * 2.5) {
     return nextPos;
   }
 
-  const smoothT = t * t * (3 - 2 * t);
-
   return [
-    prevPos[0] + dlat * smoothT,
-    prevPos[1] + dlng * smoothT,
+    prevPos[0] + dlat * t,
+    prevPos[1] + dlng * t,
   ];
 }
 
@@ -55,11 +56,11 @@ export function createShipInterpolator() {
       const s = shipStates.get(shipId);
       if (!s) return null;
       const duration = s.nextTime - s.prevTime;
-      const t = duration > 0 ? Math.min(1, Math.max(0, (currentTime - s.prevTime) / duration)) : 1;
-      const smoothT = t * t * (3 - 2 * t);
+      const renderTime = currentTime - 250;
+      const t = duration > 0 ? Math.min(1, Math.max(0, (renderTime - s.prevTime) / duration)) : 1;
       
       const pos = interpolatePosition(s.prevPos, s.nextPos, s.prevTime, s.nextTime, currentTime);
-      const heading = interpolateAngle(s.prevHeading, s.nextHeading, smoothT);
+      const heading = interpolateAngle(s.prevHeading, s.nextHeading, t);
       return { pos, heading };
     },
 

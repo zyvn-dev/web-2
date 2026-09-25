@@ -13,31 +13,59 @@ function getSimulation() {
 }
 
 let audioCtx = null;
+let userHasInteracted = false;
+
+if (typeof window !== 'undefined') {
+  const registerGesture = () => {
+    userHasInteracted = true;
+    if (audioCtx && audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+    window.removeEventListener('click', registerGesture);
+    window.removeEventListener('keydown', registerGesture);
+  };
+  window.addEventListener('click', registerGesture);
+  window.addEventListener('keydown', registerGesture);
+}
+
 export function playAlertSound(alerts, muted = false) {
-  if (muted) return;
+  if (muted || !userHasInteracted) return;
   const alertArr = Array.isArray(alerts) ? alerts : [alerts];
   const hasCritical = alertArr.some(a => a.severity === 'critical');
   const hasHigh = alertArr.some(a => a.severity === 'high');
   if (!hasCritical && !hasHigh) return;
+
   try {
     if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') {
       audioCtx.resume();
     }
+
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.connect(gain);
     gain.connect(audioCtx.destination);
-    osc.type = hasCritical ? 'sawtooth' : 'sine';
-    osc.frequency.setValueAtTime(hasCritical ? 880 : 660, audioCtx.currentTime);
+
     if (hasCritical) {
-      osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.25);
+      // Critical: 880 Hz, 0.2s duration (#7)
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.2);
+    } else if (hasHigh) {
+      // High: 660 Hz, 0.15s duration (#7)
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(660, audioCtx.currentTime);
+      gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.15);
     }
-    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.25);
-    osc.start();
-    osc.stop(audioCtx.currentTime + 0.25);
-  } catch {}
+  } catch (e) {
+    console.warn('Audio play error:', e);
+  }
 }
 
 export function useFleetSync(role, shipId, muted = false) {
@@ -55,7 +83,6 @@ export function useFleetSync(role, shipId, muted = false) {
     let ws = null;
     let isSubscribed = true;
 
-    // Try WS connection first
     const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
     const host = window.location.host;
     let url = `${protocol}://${host}/ws?role=${role}`;
@@ -65,7 +92,6 @@ export function useFleetSync(role, shipId, muted = false) {
       ws = new WebSocket(url);
       wsRef.current = ws;
 
-      // Give WS 1.5 seconds to connect. If it doesn't or errors, switch to local ClientSimulation engine.
       fallbackTimerRef.current = setTimeout(() => {
         if (!isSubscribed) return;
         if (ws.readyState !== WebSocket.OPEN) {
@@ -206,9 +232,6 @@ export function useFleetSync(role, shipId, muted = false) {
       if (wsRef.current) {
         try { wsRef.current.close(); } catch {}
       }
-      if (simRef.current) {
-        // keep sim running or cleanup
-      }
     };
   }, [role, shipId, muted]);
 
@@ -225,12 +248,16 @@ export function useFleetSync(role, shipId, muted = false) {
       case 'remove_zone':
         sim.removeRestrictedZone(msg.data.id);
         break;
-      case 'send_directive':
-        sim.sendDirective(msg.data.shipId, msg.data.directive);
+      case 'send_directive': {
+        const d = sim.sendDirective(msg.data.shipId, msg.data.directive);
+        if (d) setDirectives(prev => [...prev, d]);
         break;
-      case 'respond_directive':
-        sim.respondToDirective(msg.data.directiveId, msg.data.response);
+      }
+      case 'respond_directive': {
+        const res = sim.respondToDirective(msg.data.directiveId, msg.data.response);
+        if (res) setDirectives(prev => prev.map(d => d.id === msg.data.directiveId ? res : d));
         break;
+      }
       case 'acknowledge_alert':
         sim.acknowledgeAlert(msg.data.alertId);
         setAlerts(prev => prev.map(a => a.id === msg.data.alertId ? { ...a, acknowledged: true } : a));
