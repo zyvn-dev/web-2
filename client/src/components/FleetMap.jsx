@@ -149,7 +149,7 @@ export default function FleetMap({
     };
   }, []);
 
-  // Open Tile Layer Provider Switcher (#2 - CARTO Dark Matter / OpenStreetMap / Esri World Imagery)
+  // Open Tile Layer Provider Switcher (#2 - CARTO Dark Matter / Google Maps / OpenStreetMap / Esri World Imagery)
   useEffect(() => {
     const map = leafletMapRef.current;
     if (!map) return;
@@ -158,7 +158,19 @@ export default function FleetMap({
       map.removeLayer(tileLayerRef.current);
     }
 
-    if (mapStyle === 'dark') {
+    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+
+    if (mapStyle === 'google' && apiKey) {
+      tileLayerRef.current = L.tileLayer(`https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}&key=${apiKey}`, {
+        maxZoom: 19,
+        attribution: '&copy; Google Maps'
+      }).addTo(map);
+    } else if (mapStyle === 'google_sat' && apiKey) {
+      tileLayerRef.current = L.tileLayer(`https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}&key=${apiKey}`, {
+        maxZoom: 19,
+        attribution: '&copy; Google Maps'
+      }).addTo(map);
+    } else if (mapStyle === 'dark') {
       tileLayerRef.current = L.tileLayer('https://a.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
@@ -703,7 +715,7 @@ export default function FleetMap({
       
       <div ref={mapRef} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
 
-      {/* Open Tile Layer Switcher (#2 - CARTO Dark Matter / OpenStreetMap / Esri Satellite / Radar Grid) */}
+      {/* Tile Layer Switcher (CARTO Dark / Google Maps / Esri Satellite / OSM / Radar Grid) */}
       <div className="map-style-selector">
         <button 
           className={`style-btn ${mapStyle === 'dark' ? 'active' : ''}`}
@@ -712,26 +724,44 @@ export default function FleetMap({
         >
           🌑 Dark Carto
         </button>
+        {import.meta.env.VITE_GOOGLE_MAPS_API_KEY && (
+          <>
+            <button 
+              className={`style-btn ${mapStyle === 'google' ? 'active' : ''}`}
+              onClick={() => setMapStyle('google')}
+              title="Google Maps Roadmap"
+            >
+              🗺️ Google Maps
+            </button>
+            <button 
+              className={`style-btn ${mapStyle === 'google_sat' ? 'active' : ''}`}
+              onClick={() => setMapStyle('google_sat')}
+              title="Google Maps Hybrid Satellite"
+            >
+              🛰️ Google Satellite
+            </button>
+          </>
+        )}
         <button 
           className={`style-btn ${mapStyle === 'satellite' ? 'active' : ''}`}
           onClick={() => setMapStyle('satellite')}
           title="Esri World Satellite Imagery"
         >
-          🛰️ Satellite
+          🛰️ Esri Satellite
         </button>
         <button 
           className={`style-btn ${mapStyle === 'osm' ? 'active' : ''}`}
           onClick={() => setMapStyle('osm')}
           title="OpenStreetMap Standard"
         >
-          🗺️ OpenStreetMap
+          🌐 OpenStreetMap
         </button>
         <button 
           className={`style-btn ${mapStyle === 'canvas' ? 'active' : ''}`}
           onClick={() => setMapStyle('canvas')}
           title="Tactical Ocean Grid"
         >
-          🌐 Radar Grid
+          📡 Radar Grid
         </button>
       </div>
 
