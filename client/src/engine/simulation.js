@@ -25,6 +25,7 @@ export class ClientSimulation {
     this.tickInterval = null;
     this.lastTick = Date.now();
     this._proximityActive = new Set();
+    this._predictedActive = new Set();
     this.listeners = new Set();
 
     for (const ship of fleetData.fleet) {
@@ -35,17 +36,27 @@ export class ClientSimulation {
         this.navigableWater, this.restrictedZones
       ) : null;
 
+      // Simulate localized weather variance
+      const isAdverse = Math.random() < 0.2;
+      const weather = isAdverse 
+        ? { description: 'Heavy Swells & High Wind', adverse: true, windSpeed: 45, precipitation: 8 }
+        : { description: 'Clear Sea & Light Breeze', adverse: false, windSpeed: 12, precipitation: 0 };
+
       this.ships.set(ship.shipId, {
         ...ship,
         position: [...ship.position],
         route: route || [ship.position],
         routeIndex: 0,
-        weather: { description: 'Clear', adverse: false },
+        weather,
         fuelWarning: false,
         arrived: false,
         _inZone: new Set(),
+        positionHistory: [[...ship.position]],
       });
     }
+
+    // Save initial history snapshot immediately
+    this.saveSnapshot();
   }
 
   addListener(fn) { this.listeners.add(fn); }
@@ -78,12 +89,13 @@ export class ClientSimulation {
 
     for (const ship of this.ships.values()) {
       if (ship.status === 'arrived' || ship.status === 'stopped' || ship.status === 'stranded') continue;
+      
       if (ship.fuel <= 0) {
         if (ship.status !== 'out_of_fuel') {
           ship.status = 'out_of_fuel';
           ship.speed = 0;
           newAlerts.push(this.createAlert('fuel', 'critical', ship.shipId,
-            `${ship.name} has run out of fuel at position ${ship.position[0].toFixed(3)}, ${ship.position[1].toFixed(3)}`));
+            `🚨 ${ship.name} has run out of fuel at position ${ship.position[0].toFixed(3)}, ${ship.position[1].toFixed(3)}`));
         }
         continue;
       }
@@ -120,7 +132,7 @@ export class ClientSimulation {
                 ship.status = 'arrived';
                 ship.speed = 0;
                 newAlerts.push(this.createAlert('arrival', 'low', ship.shipId,
-                  `${ship.name} has arrived at ${dest.name}`));
+                  `✅ ${ship.name} has safely arrived at ${dest.name}`));
               }
             }
           }
@@ -133,6 +145,15 @@ export class ClientSimulation {
         ship.position = newPos;
       }
 
+      // Record Breadcrumb position history (max 20)
+      if (!ship.positionHistory) ship.positionHistory = [];
+      const lastHist = ship.positionHistory[ship.positionHistory.length - 1];
+      if (!lastHist || haversineDistance(lastHist[0], lastHist[1], ship.position[0], ship.position[1]) > 0.1) {
+        ship.positionHistory.push([...ship.position]);
+        if (ship.positionHistory.length > 20) ship.positionHistory.shift();
+      }
+
+      // Fuel Warning Check
       const dest = this.ports.find(p => p.id === ship.destination);
       if (dest && ship.status !== 'arrived') {
         const remainingRoute = this.getRemainingRouteDistance(ship);
@@ -141,24 +162,40 @@ export class ClientSimulation {
           ship.fuelWarning = true;
           ship.status = 'insufficient_fuel';
           newAlerts.push(this.createAlert('fuel', 'high', ship.shipId,
-            `${ship.name} has insufficient fuel to reach ${dest.name}. Fuel: ${ship.fuel.toFixed(0)}t, Need: ${fuelNeeded.toFixed(0)}t`));
+            `⛽ ${ship.name} has insufficient fuel reserve to reach ${dest.name}. Fuel: ${ship.fuel.toFixed(0)}t (Needs ~${fuelNeeded.toFixed(0)}t)`));
         }
       }
 
+      // Geofence Breach Check
       for (const zone of this.restrictedZones) {
         if (pointInPolygon(ship.position[0], ship.position[1], zone.polygon)) {
           if (!ship._inZone.has(zone.id)) {
             ship._inZone.add(zone.id);
             newAlerts.push(this.createAlert('geofence', 'critical', ship.shipId,
-              `${ship.name} has entered restricted zone "${zone.name}"`, { zoneId: zone.id }));
+              `🚫 ${ship.name} entered restricted red zone "${zone.name}"`, { zoneId: zone.id }));
             this.rerouteShip(ship);
           }
         } else {
           ship._inZone.delete(zone.id);
         }
       }
+
+      // Predictive Dead-Reckoning Check (5 min lookahead)
+      const lookaheadKm = speedKmS * 300; // 5 minutes
+      const futurePos = movePoint(ship.position[0], ship.position[1], ship.heading || 0, lookaheadKm);
+      for (const zone of this.restrictedZones) {
+        if (pointInPolygon(futurePos[0], futurePos[1], zone.polygon)) {
+          const key = `${ship.shipId}-${zone.id}`;
+          if (!this._predictedActive.has(key)) {
+            this._predictedActive.add(key);
+            newAlerts.push(this.createAlert('predictive', 'high', ship.shipId,
+              `🔮 PREDICTIVE ALERT: ${ship.name} course intersects "${zone.name}" within 5 minutes!`));
+          }
+        }
+      }
     }
 
+    // Proximity Pair Warnings
     const shipList = [...this.ships.values()];
     for (let i = 0; i < shipList.length; i++) {
       for (let j = i + 1; j < shipList.length; j++) {
@@ -171,7 +208,7 @@ export class ClientSimulation {
           if (!this._proximityActive.has(pairKey)) {
             this._proximityActive.add(pairKey);
             newAlerts.push(this.createAlert('proximity', 'high', a.shipId,
-              `${a.name} and ${b.name} are within ${d.toFixed(2)}km of each other`,
+              `⚠️ PROXIMITY: ${a.name} and ${b.name} are within ${d.toFixed(2)}km of each other`,
               { otherShipId: b.shipId, distance: d }));
           }
         } else {
@@ -186,7 +223,8 @@ export class ClientSimulation {
       this.alerts = prioritizeAlerts(this.alerts);
     }
 
-    if (this.tickCount % 30 === 0) {
+    // Save snapshot every 15 ticks for smooth history playback
+    if (this.tickCount % 15 === 0) {
       this.saveSnapshot();
     }
 
@@ -232,8 +270,9 @@ export class ClientSimulation {
     } else {
       ship.status = 'stranded';
       const alert = this.createAlert('stranded', 'critical', ship.shipId,
-        `${ship.name} is stranded - no valid route to ${dest.name}`);
+        `🚨 ${ship.name} is stranded - no navigable route available to ${dest.name}`);
       this.alerts.push(alert);
+      this.alerts = prioritizeAlerts(this.alerts);
       this.broadcast({ type: 'alerts', data: [alert] });
     }
   }
@@ -253,7 +292,7 @@ export class ClientSimulation {
       if (ship.status === 'arrived' || ship.status === 'stopped' || ship.status === 'stranded') continue;
       if (pointInPolygon(ship.position[0], ship.position[1], closedPolygon)) {
         this.alerts.push(this.createAlert('geofence', 'critical', ship.shipId,
-          `${ship.name} is inside newly created restricted zone "${newZone.name}"`, { zoneId: id }));
+          `🚫 ${ship.name} is inside newly designated restricted zone "${newZone.name}"`, { zoneId: id }));
         ship._inZone.add(id);
         this.rerouteShip(ship);
       } else if (ship.route) {
@@ -266,6 +305,7 @@ export class ClientSimulation {
       }
     }
 
+    this.alerts = prioritizeAlerts(this.alerts);
     this.broadcast({ type: 'zone_added', data: newZone });
     return newZone;
   }
@@ -314,7 +354,7 @@ export class ClientSimulation {
           ship.speed = 0;
         } else if (directive.type === 'resume') {
           ship.status = 'normal';
-          ship.speed = directive.data?.speed || 12;
+          ship.speed = directive.data?.speed || 14;
           this.rerouteShip(ship);
         } else if (directive.type === 'change_speed') {
           ship.speed = directive.data?.speed || ship.speed;
@@ -410,6 +450,7 @@ export class ClientSimulation {
         weather: s.weather,
         route: s.route,
         fuelWarning: s.fuelWarning,
+        positionHistory: s.positionHistory || [[...s.position]],
       })),
       restrictedZones: this.restrictedZones,
       ports: this.ports,

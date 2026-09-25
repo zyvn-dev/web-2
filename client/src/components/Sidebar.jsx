@@ -1,48 +1,60 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 
 export default function Sidebar({
   role, setRole, captainShip, setCaptainShip,
   state, alerts, directives, selectedShip, onSelectShip,
   onSendDirective, onRespondDirective, onAcknowledgeAlert, onDistress,
   activeTab, setActiveTab, connected, criticalCount, unacknowledgedCount,
-  searchQuery, setSearchQuery, statusFilter, setStatusFilter, muted, setMuted
+  searchQuery, setSearchQuery, statusFilter, setStatusFilter, muted, setMuted,
+  onOpenAssumptions
 }) {
   const ships = state?.ships || [];
   const ports = state?.ports || [];
 
-  const distressedCount = ships.filter(s => s.status === 'distressed' || s.status === 'stranded').length;
-  const reroutingCount = ships.filter(s => s.status === 'rerouting').length;
+  const distressedCount = useMemo(() => ships.filter(s => s.status === 'distressed' || s.status === 'stranded').length, [ships]);
+  const reroutingCount = useMemo(() => ships.filter(s => s.status === 'rerouting').length, [ships]);
 
   return (
-    <div className="sidebar">
-      {/* Top Header */}
+    <div className="sidebar" role="region" aria-label="Fleet Operations Control Sidebar">
+      {/* Top Header (#15) */}
       <div className="sidebar-header">
         <div className="title-row">
           <div>
             <h1>FLEET COMMAND</h1>
             <div className="subtitle">Strait of Hormuz Operations</div>
           </div>
-          <button 
-            className={`sound-btn ${muted ? 'muted' : ''}`}
-            onClick={() => setMuted(!muted)}
-            title={muted ? "Unmute Alerts" : "Mute Alerts"}
-          >
-            {muted ? '🔇' : '🔔'}
-          </button>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button 
+              className="sound-btn"
+              onClick={onOpenAssumptions}
+              title="View System Assumptions & Spec Parameters"
+              aria-label="View Operational Assumptions"
+            >
+              ℹ️
+            </button>
+            <button 
+              className={`sound-btn ${muted ? 'muted' : ''}`}
+              onClick={() => setMuted(!muted)}
+              title={muted ? "Unmute Sound Alerts" : "Mute Sound Alerts"}
+              aria-label={muted ? "Unmute Sound Alerts" : "Mute Sound Alerts"}
+            >
+              {muted ? '🔇' : '🔔'}
+            </button>
+          </div>
         </div>
 
         <div className="connection-status">
           <span className={`connection-dot ${connected ? 'connected' : 'disconnected'}`} />
-          <span>{connected ? 'LIVE TELEMETRY' : 'RECONNECTING...'}</span>
-          <span className="ship-count-badge">{ships.length} VESSELS IN STRAIT</span>
+          <span>{connected ? 'LIVE TELEMETRY SYNC' : 'RECONNECTING...'}</span>
+          <span className="ship-count-badge font-mono">{ships.length} VESSELS</span>
         </div>
       </div>
 
       {/* Role & Captain Selector */}
       <div className="role-selector">
         <div className="selector-group">
-          <label>OPERATIONAL ROLE:</label>
-          <select value={role} onChange={(e) => setRole(e.target.value)}>
+          <label htmlFor="role-select">OPERATIONAL ROLE:</label>
+          <select id="role-select" value={role} onChange={(e) => setRole(e.target.value)}>
             <option value="command">🎖️ Fleet Command HQ</option>
             <option value="captain">⚓ Vessel Captain</option>
           </select>
@@ -50,8 +62,8 @@ export default function Sidebar({
 
         {role === 'captain' && (
           <div className="selector-group" style={{ marginTop: 8 }}>
-            <label>YOUR VESSEL:</label>
-            <select value={captainShip} onChange={(e) => setCaptainShip(e.target.value)}>
+            <label htmlFor="vessel-select">YOUR VESSEL:</label>
+            <select id="vessel-select" value={captainShip} onChange={(e) => setCaptainShip(e.target.value)}>
               {state?.ships?.map(s => (
                 <option key={s.shipId} value={s.shipId}>{s.name} ({s.shipId}) - {s.cargo}</option>
               )) || <option>Loading ships...</option>}
@@ -61,11 +73,21 @@ export default function Sidebar({
       </div>
 
       {/* Navigation Tabs */}
-      <div className="tabs">
-        <button className={`tab ${activeTab === 'ships' ? 'active' : ''}`} onClick={() => setActiveTab('ships')}>
+      <div className="tabs" role="tablist">
+        <button 
+          role="tab" 
+          aria-selected={activeTab === 'ships'}
+          className={`tab ${activeTab === 'ships' ? 'active' : ''}`} 
+          onClick={() => setActiveTab('ships')}
+        >
           Vessels ({ships.length})
         </button>
-        <button className={`tab ${activeTab === 'alerts' ? 'active' : ''}`} onClick={() => setActiveTab('alerts')}>
+        <button 
+          role="tab" 
+          aria-selected={activeTab === 'alerts'}
+          className={`tab ${activeTab === 'alerts' ? 'active' : ''}`} 
+          onClick={() => setActiveTab('alerts')}
+        >
           Alerts
           {unacknowledgedCount > 0 && (
             <span className={`tab-badge ${criticalCount > 0 ? 'danger' : 'warning'}`}>
@@ -73,7 +95,12 @@ export default function Sidebar({
             </span>
           )}
         </button>
-        <button className={`tab ${activeTab === 'directives' ? 'active' : ''}`} onClick={() => setActiveTab('directives')}>
+        <button 
+          role="tab" 
+          aria-selected={activeTab === 'directives'}
+          className={`tab ${activeTab === 'directives' ? 'active' : ''}`} 
+          onClick={() => setActiveTab('directives')}
+        >
           Orders
         </button>
       </div>
@@ -115,26 +142,93 @@ export default function Sidebar({
   );
 }
 
+const ShipCard = React.memo(({ ship, destName, isSelected, onSelectShip }) => {
+  const fuelPercent = Math.min(100, Math.max(0, Math.round((ship.fuel / 10000) * 100)));
+  return (
+    <div
+      className={`ship-card ${isSelected ? 'selected' : ''} border-status-${ship.status}`}
+      onClick={() => onSelectShip(ship.shipId)}
+      tabIndex={0}
+      role="button"
+      aria-label={`Select vessel ${ship.name} destination ${destName}`}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onSelectShip(ship.shipId); }}
+    >
+      <div className="ship-card-header">
+        <div>
+          <span className="ship-name">🚢 {ship.name}</span>
+          <span className="ship-id font-mono">[{ship.shipId}]</span>
+        </div>
+        <span className={`status-badge status-${ship.status}`}>
+          {ship.status.replace('_', ' ')}
+        </span>
+      </div>
+
+      <div className="ship-card-body">
+        <div className="meta-col">
+          <span className="meta-label">Cargo</span>
+          <span className="meta-val" style={{ textTransform: 'capitalize' }}>{ship.cargo}</span>
+        </div>
+        <div className="meta-col">
+          <span className="meta-label">Speed</span>
+          <span className="meta-val">{ship.speed} kn</span>
+        </div>
+        <div className="meta-col">
+          <span className="meta-label">Fuel Level</span>
+          <span className="meta-val">{ship.fuel?.toFixed(0)} t ({fuelPercent}%)</span>
+        </div>
+        <div className="meta-col">
+          <span className="meta-label">Destination</span>
+          <span className="meta-val" style={{ color: '#38bdf8', fontWeight: 600 }}>{destName}</span>
+        </div>
+      </div>
+
+      {/* Visual Fuel Bar (#16) */}
+      <div className="mini-fuel-track" style={{ marginTop: 8 }}>
+        <div 
+          className={`mini-fuel-bar ${ship.fuel < 1000 ? 'critical' : ship.fuel < 3000 ? 'warning' : 'good'}`}
+          style={{ width: `${fuelPercent}%` }}
+        />
+      </div>
+
+      {ship.weather && (
+        <div className="ship-card-weather">
+          <span className={`weather-badge ${ship.weather.adverse ? 'adverse' : 'clear'}`}>
+            {ship.weather.adverse ? '⚠️ Adverse Weather' : '☀️ Clear Water'} &middot; {ship.weather.description}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+});
+
 function ShipList({ 
   ships, ports, selectedShip, onSelectShip, 
   searchQuery, setSearchQuery, statusFilter, setStatusFilter,
   distressedCount, reroutingCount 
 }) {
-  const filteredShips = ships.filter(ship => {
-    const matchesSearch = !searchQuery || 
-      ship.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      ship.shipId.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      ship.cargo.toLowerCase().includes(searchQuery.toLowerCase());
+  const filteredShips = useMemo(() => {
+    return ships.filter(ship => {
+      const matchesSearch = !searchQuery || 
+        ship.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        ship.shipId.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        ship.cargo.toLowerCase().includes(searchQuery.toLowerCase());
 
-    const matchesStatus = statusFilter === 'all' || 
-      (statusFilter === 'distressed' && (ship.status === 'distressed' || ship.status === 'stranded')) ||
-      (statusFilter === 'rerouting' && ship.status === 'rerouting') ||
-      (statusFilter === 'fuel' && (ship.status === 'insufficient_fuel' || ship.status === 'out_of_fuel' || ship.fuelWarning)) ||
-      (statusFilter === 'arrived' && ship.status === 'arrived') ||
-      (statusFilter === 'normal' && ship.status === 'normal');
+      const matchesStatus = statusFilter === 'all' || 
+        (statusFilter === 'distressed' && (ship.status === 'distressed' || ship.status === 'stranded')) ||
+        (statusFilter === 'rerouting' && ship.status === 'rerouting') ||
+        (statusFilter === 'fuel' && (ship.status === 'insufficient_fuel' || ship.status === 'out_of_fuel' || ship.fuelWarning)) ||
+        (statusFilter === 'arrived' && ship.status === 'arrived') ||
+        (statusFilter === 'normal' && ship.status === 'normal');
 
-    return matchesSearch && matchesStatus;
-  });
+      return matchesSearch && matchesStatus;
+    });
+  }, [ships, searchQuery, statusFilter]);
+
+  const portMap = useMemo(() => {
+    const map = new Map();
+    for (const p of ports) map.set(p.id, p.name);
+    return map;
+  }, [ports]);
 
   return (
     <div>
@@ -145,14 +239,15 @@ function ShipList({
           placeholder="🔍 Search vessel, ID, or cargo..." 
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
+          aria-label="Search vessel by name, ID, or cargo"
         />
         {searchQuery && (
-          <button className="clear-search" onClick={() => setSearchQuery('')}>&times;</button>
+          <button className="clear-search" onClick={() => setSearchQuery('')} aria-label="Clear search">&times;</button>
         )}
       </div>
 
       {/* Quick Filter Pills */}
-      <div className="filter-pills">
+      <div className="filter-pills" role="toolbar" aria-label="Status Filters">
         <button className={`pill ${statusFilter === 'all' ? 'active' : ''}`} onClick={() => setStatusFilter('all')}>
           All ({ships.length})
         </button>
@@ -168,125 +263,100 @@ function ShipList({
       {filteredShips.length === 0 ? (
         <div className="empty-state">No matching vessels found</div>
       ) : (
-        filteredShips.map(ship => {
-          const dest = ports.find(p => p.id === ship.destination);
-          const isSelected = selectedShip === ship.shipId;
-          return (
-            <div
-              key={ship.shipId}
-              className={`ship-card ${isSelected ? 'selected' : ''}`}
-              onClick={() => onSelectShip(ship.shipId)}
-            >
-              <div className="ship-card-header">
-                <div>
-                  <span className="ship-name">{ship.name}</span>
-                  <span className="ship-id font-mono">[{ship.shipId}]</span>
-                </div>
-                <span className={`status-badge status-${ship.status}`}>
-                  {ship.status.replace('_', ' ')}
-                </span>
-              </div>
-
-              <div className="ship-card-body">
-                <div className="meta-col">
-                  <span className="meta-label">Cargo</span>
-                  <span className="meta-val" style={{ textTransform: 'capitalize' }}>{ship.cargo}</span>
-                </div>
-                <div className="meta-col">
-                  <span className="meta-label">Speed</span>
-                  <span className="meta-val">{ship.speed} kn</span>
-                </div>
-                <div className="meta-col">
-                  <span className="meta-label">Fuel</span>
-                  <span className="meta-val">{ship.fuel?.toFixed(0)} t</span>
-                </div>
-                <div className="meta-col">
-                  <span className="meta-label">Destination</span>
-                  <span className="meta-val" style={{ color: '#38bdf8' }}>{dest?.name || ship.destination}</span>
-                </div>
-              </div>
-
-              {ship.weather && (
-                <div className="ship-card-weather">
-                  <span className={`weather-badge ${ship.weather.adverse ? 'adverse' : 'clear'}`}>
-                    {ship.weather.adverse ? '⚠️ Adverse Weather' : '☀️ Clear Water'} &middot; {ship.weather.description}
-                  </span>
-                </div>
-              )}
-            </div>
-          );
-        })
+        filteredShips.map(ship => (
+          <ShipCard 
+            key={ship.shipId}
+            ship={ship}
+            destName={portMap.get(ship.destination) || ship.destination}
+            isSelected={selectedShip === ship.shipId}
+            onSelectShip={onSelectShip}
+          />
+        ))
       )}
     </div>
   );
 }
 
 function AlertList({ alerts, onAcknowledge }) {
-  const sorted = [...alerts].reverse();
+  // Sort Critical -> High -> Medium -> Low, then newest first (#23)
+  const sortedAlerts = useMemo(() => {
+    const sevOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+    return [...alerts].sort((a, b) => {
+      const aSev = sevOrder[a.severity] ?? 3;
+      const bSev = sevOrder[b.severity] ?? 3;
+      if (aSev !== bSev) return aSev - bSev;
+      return (b.timestamp || 0) - (a.timestamp || 0);
+    });
+  }, [alerts]);
+
   return (
     <div>
-      {sorted.length === 0 && <div className="empty-state">No active crisis alerts</div>}
-      {sorted.map(alert => (
-        <div key={alert.id} className={`alert-card ${alert.severity} ${alert.acknowledged ? 'acknowledged' : ''}`}>
-          <div className="alert-header">
-            <span className="alert-type">
-              {alert.type === 'geofence' ? '🚫 Restricted Zone' :
-               alert.type === 'proximity' ? '⚠️ Proximity Warning' :
-               alert.type === 'distress' ? '🚨 Distress Call' :
-               alert.type === 'fuel' ? '⛽ Fuel Warning' : alert.type}
-            </span>
-            <span className="alert-time font-mono">{new Date(alert.timestamp).toLocaleTimeString()}</span>
-          </div>
-
-          <div className="alert-message">{alert.message}</div>
-
-          {alert.analysis && (
-            <div className="analysis-card">
-              <div className="analysis-header">🤖 AI Distress NLP Diagnostics</div>
-              
-              <div className="analysis-grid">
-                <div className="analysis-item">
-                  <span className="label">Categories:</span>
-                  <span className="val" style={{ textTransform: 'capitalize' }}>
-                    {alert.analysis.categories?.join(', ')}
-                  </span>
-                </div>
-
-                {alert.analysis.injuryCount != null && (
-                  <div className="analysis-item">
-                    <span className="label">Injuries:</span>
-                    <span className="val danger font-bold">{alert.analysis.injuryCount} crew members</span>
-                  </div>
-                )}
-
-                {alert.analysis.damageEstimate && (
-                  <div className="analysis-item">
-                    <span className="label">Damage:</span>
-                    <span className="val warning">{alert.analysis.damageEstimate}</span>
-                  </div>
-                )}
-
-                {alert.analysis.assistanceNeeded?.length > 0 && (
-                  <div className="analysis-item">
-                    <span className="label">Required Assistance:</span>
-                    <div className="tag-list">
-                      {alert.analysis.assistanceNeeded.map(a => (
-                        <span key={a} className="assist-tag">{a.replace('_', ' ')}</span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
+      {sortedAlerts.length === 0 ? (
+        <div className="empty-state">No active alerts — fleet nominal ✅</div>
+      ) : (
+        sortedAlerts.map(alert => (
+          <div key={alert.id} className={`alert-card ${alert.severity} ${alert.acknowledged ? 'acknowledged' : ''}`}>
+            <div className="alert-header">
+              <span className="alert-type">
+                {alert.type === 'geofence' ? '🚫 Restricted Zone' :
+                 alert.type === 'proximity' ? '⚠️ Proximity Warning' :
+                 alert.type === 'distress' ? '🚨 Distress Call' :
+                 alert.type === 'fuel' ? '⛽ Fuel Warning' :
+                 alert.type === 'predictive' ? '🔮 Predictive Warning' : alert.type}
+              </span>
+              <span className="alert-time font-mono">{new Date(alert.timestamp).toLocaleTimeString()}</span>
             </div>
-          )}
 
-          {!alert.acknowledged && (
-            <button className="ack-btn" onClick={() => onAcknowledge(alert.id)}>
-              ✓ Acknowledge Alert
-            </button>
-          )}
-        </div>
-      ))}
+            <div className="alert-message">{alert.message}</div>
+
+            {alert.analysis && (
+              <div className="analysis-card">
+                <div className="analysis-header">🤖 AI Distress Diagnostics</div>
+                
+                <div className="analysis-grid">
+                  <div className="analysis-item">
+                    <span className="label">Categories:</span>
+                    <span className="val" style={{ textTransform: 'capitalize' }}>
+                      {alert.analysis.categories?.join(', ')}
+                    </span>
+                  </div>
+
+                  {alert.analysis.injuryCount != null && (
+                    <div className="analysis-item">
+                      <span className="label">Injuries:</span>
+                      <span className="val danger font-bold">{alert.analysis.injuryCount} crew members</span>
+                    </div>
+                  )}
+
+                  {alert.analysis.damageEstimate && (
+                    <div className="analysis-item">
+                      <span className="label">Damage:</span>
+                      <span className="val warning">{alert.analysis.damageEstimate}</span>
+                    </div>
+                  )}
+
+                  {alert.analysis.assistanceNeeded?.length > 0 && (
+                    <div className="analysis-item">
+                      <span className="label">Required Assistance:</span>
+                      <div className="tag-list">
+                        {alert.analysis.assistanceNeeded.map(a => (
+                          <span key={a} className="assist-tag">{a.replace('_', ' ')}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {!alert.acknowledged && (
+              <button className="ack-btn" onClick={() => onAcknowledge(alert.id)}>
+                ✓ Acknowledge Alert
+              </button>
+            )}
+          </div>
+        ))
+      )}
     </div>
   );
 }
@@ -316,16 +386,16 @@ function DirectivePanel({ ships, ports, directives, onSendDirective }) {
         <h3>Issuing Tactical Command Directive</h3>
         
         <div className="form-group">
-          <label>Target Vessel:</label>
-          <select value={targetShip} onChange={e => setTargetShip(e.target.value)}>
+          <label htmlFor="target-ship-select">Target Vessel:</label>
+          <select id="target-ship-select" value={targetShip} onChange={e => setTargetShip(e.target.value)}>
             <option value="">Select Vessel</option>
             {ships.map(s => <option key={s.shipId} value={s.shipId}>{s.name} ({s.shipId}) - {s.status}</option>)}
           </select>
         </div>
 
         <div className="form-group">
-          <label>Order Type:</label>
-          <select value={directiveType} onChange={e => setDirectiveType(e.target.value)}>
+          <label htmlFor="directive-type-select">Order Type:</label>
+          <select id="directive-type-select" value={directiveType} onChange={e => setDirectiveType(e.target.value)}>
             <option value="reroute">Reroute to Port</option>
             <option value="hold_position">Hold Position (Stop Engine)</option>
             <option value="resume">Resume Navigation</option>
@@ -335,8 +405,8 @@ function DirectivePanel({ ships, ports, directives, onSendDirective }) {
 
         {directiveType === 'reroute' && (
           <div className="form-group">
-            <label>Destination Port:</label>
-            <select value={destination} onChange={e => setDestination(e.target.value)}>
+            <label htmlFor="dest-port-select">Destination Port:</label>
+            <select id="dest-port-select" value={destination} onChange={e => setDestination(e.target.value)}>
               <option value="">Select Port</option>
               {ports.map(p => <option key={p.id} value={p.id}>{p.name} ({p.id})</option>)}
             </select>
@@ -345,8 +415,8 @@ function DirectivePanel({ ships, ports, directives, onSendDirective }) {
 
         {(directiveType === 'change_speed' || directiveType === 'resume') && (
           <div className="form-group">
-            <label>Set Target Speed (Knots):</label>
-            <input type="number" value={speed} onChange={e => setSpeed(e.target.value)} min="0" max="30" />
+            <label htmlFor="speed-input">Set Target Speed (Knots):</label>
+            <input id="speed-input" type="number" value={speed} onChange={e => setSpeed(e.target.value)} min="0" max="30" />
           </div>
         )}
 
@@ -367,7 +437,7 @@ function DirectivePanel({ ships, ports, directives, onSendDirective }) {
         </div>
       )}
 
-      {recentDirs.length > 0 && (
+      {recentDirs.length > 0 ? (
         <div className="section-block">
           <h4 className="section-title">Order Audit Log</h4>
           {recentDirs.map(d => (
@@ -382,6 +452,8 @@ function DirectivePanel({ ships, ports, directives, onSendDirective }) {
             </div>
           ))}
         </div>
+      ) : (
+        <div className="empty-state">No pending orders — fleet nominal ✅</div>
       )}
     </div>
   );
@@ -444,6 +516,7 @@ function CaptainPanel({ ship, directives, onRespond, onDistress, captainShip }) 
           value={distressMsg}
           onChange={e => setDistressMsg(e.target.value)}
           placeholder="Example: Engine explosion in cargo hold 2! Taking on water rapidly with 3 injured crew members..."
+          aria-label="Distress Message Input"
         />
         <button className="btn btn-danger" onClick={handleDistress} disabled={!distressMsg.trim()}>
           📡 Send Distress Broadcast

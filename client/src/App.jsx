@@ -16,6 +16,8 @@ export default function App() {
   const [playbackMode, setPlaybackMode] = useState(false);
   const [playbackIndex, setPlaybackIndex] = useState(0);
   const [playbackHistory, setPlaybackHistory] = useState([]);
+  const [showAssumptionsModal, setShowAssumptionsModal] = useState(false);
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
 
   const shipId = role === 'captain' ? captainShip : null;
   const { connected, isLocalEngine, state, alerts, directives, send } = useFleetSync(role, shipId, muted);
@@ -60,10 +62,10 @@ export default function App() {
         setPlaybackMode(true);
         setPlaybackIndex(Math.max(0, history.length - 1));
       } else {
-        alert('Historical playback snapshots are generating. Please wait a few moments.');
+        alert('Historical snapshots initializing. Please wait a moment.');
       }
     } else {
-      alert('Playback unavailable in live server sync mode.');
+      alert('Playback mode available in local browser simulation mode.');
     }
   }, [playbackMode]);
 
@@ -85,52 +87,76 @@ export default function App() {
   const emergencyShips = displayState?.ships?.filter(s => s.status === 'distressed' || s.status === 'stranded').length || 0;
   const arrivedShips = displayState?.ships?.filter(s => s.status === 'arrived').length || 0;
 
+  // Loading Skeleton (#19)
+  if (!state || !state.ships) {
+    return (
+      <div className="splash-screen">
+        <div className="splash-spinner">◈</div>
+        <h2>Initializing Fleet Telemetry Systems…</h2>
+        <p>Connecting to Strait of Hormuz Crisis Command</p>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
-      <Sidebar
-        role={role}
-        setRole={setRole}
-        captainShip={captainShip}
-        setCaptainShip={setCaptainShip}
-        state={displayState}
-        alerts={alerts}
-        directives={directives}
-        selectedShip={selectedShip}
-        onSelectShip={handleSelectShip}
-        onSendDirective={handleSendDirective}
-        onRespondDirective={handleRespondDirective}
-        onAcknowledgeAlert={handleAcknowledgeAlert}
-        onDistress={handleDistress}
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        connected={connected}
-        criticalCount={criticalCount}
-        unacknowledgedCount={unacknowledgedAlerts.length}
-        searchQuery={searchQuery}
-        setSearchQuery={setSearchQuery}
-        statusFilter={statusFilter}
-        setStatusFilter={setStatusFilter}
-        muted={muted}
-        setMuted={setMuted}
-      />
+      {/* Mobile Drawer Toggle Button (#29) */}
+      <button 
+        className="mobile-drawer-toggle"
+        onClick={() => setMobileDrawerOpen(!mobileDrawerOpen)}
+        aria-label="Toggle Command Control Sidebar"
+      >
+        {mobileDrawerOpen ? '✕ Close Sidebar' : '☰ Command Controls'}
+      </button>
+
+      {/* Control Sidebar */}
+      <div className={`sidebar-wrapper ${mobileDrawerOpen ? 'mobile-open' : ''}`}>
+        <Sidebar
+          role={role}
+          setRole={setRole}
+          captainShip={captainShip}
+          setCaptainShip={setCaptainShip}
+          state={displayState}
+          alerts={alerts}
+          directives={directives}
+          selectedShip={selectedShip}
+          onSelectShip={handleSelectShip}
+          onSendDirective={handleSendDirective}
+          onRespondDirective={handleRespondDirective}
+          onAcknowledgeAlert={handleAcknowledgeAlert}
+          onDistress={handleDistress}
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          connected={connected}
+          criticalCount={criticalCount}
+          unacknowledgedCount={unacknowledgedAlerts.length}
+          searchQuery={searchQuery}
+          setSearchQuery={setSearchQuery}
+          statusFilter={statusFilter}
+          setStatusFilter={setStatusFilter}
+          muted={muted}
+          setMuted={setMuted}
+          onOpenAssumptions={() => setShowAssumptionsModal(true)}
+        />
+      </div>
 
       <div className="map-container">
-        {/* Top Tactical Dashboard Bar */}
+        {/* Top Tactical KPI Bar (#13) */}
         <div className="top-tactical-bar">
           <div className="stats-pill-group">
-            <div className="stat-pill normal" onClick={() => setStatusFilter('normal')}>
+            <div className="stat-pill normal" onClick={() => setStatusFilter('normal')} title="Show Normal Ships">
               <span className="dot"></span>
               <span>NORMAL: <strong>{normalShips}</strong></span>
             </div>
-            <div className="stat-pill rerouting" onClick={() => setStatusFilter('rerouting')}>
+            <div className="stat-pill rerouting" onClick={() => setStatusFilter('rerouting')} title="Show Rerouting Ships">
               <span className="dot"></span>
               <span>REROUTING: <strong>{reroutingShips}</strong></span>
             </div>
-            <div className="stat-pill emergency" onClick={() => setStatusFilter('distressed')}>
+            <div className="stat-pill emergency" onClick={() => setStatusFilter('distressed')} title="Show Emergency Ships">
               <span className="dot"></span>
               <span>EMERGENCY: <strong>{emergencyShips}</strong></span>
             </div>
-            <div className="stat-pill arrived" onClick={() => setStatusFilter('arrived')}>
+            <div className="stat-pill arrived" onClick={() => setStatusFilter('arrived')} title="Show Arrived Ships">
               <span className="dot"></span>
               <span>ARRIVED: <strong>{arrivedShips}</strong></span>
             </div>
@@ -142,14 +168,16 @@ export default function App() {
                 <button
                   className={`action-btn ${drawingMode ? 'active' : ''}`}
                   onClick={() => setDrawingMode(!drawingMode)}
+                  title="Draw Restricted Red Zone on Map"
                 >
-                  {drawingMode ? '❌ Cancel Drawing' : '✏️ Draw Restricted Red Zone'}
+                  {drawingMode ? '❌ Cancel Draw' : '✏️ Draw Restricted Zone'}
                 </button>
                 <button 
                   className={`action-btn ${playbackMode ? 'active' : ''}`}
                   onClick={handlePlayback}
+                  title="Timeline Scrubber Playback"
                 >
-                  {playbackMode ? '🔴 Exit Playback' : '⏮️ Timeline Playback'}
+                  {playbackMode ? '🔴 Exit Playback' : '⏮️ Playback (Space)'}
                 </button>
               </>
             )}
@@ -171,9 +199,11 @@ export default function App() {
           onDistress={handleDistress}
           searchQuery={searchQuery}
           statusFilter={statusFilter}
+          playbackMode={playbackMode}
+          setPlaybackMode={setPlaybackMode}
         />
 
-        {/* Playback Scrubbing Bar */}
+        {/* Playback Scrubber Bar (#3) */}
         {playbackMode && playbackHistory.length > 0 && (
           <PlaybackBar
             history={playbackHistory}
@@ -183,6 +213,29 @@ export default function App() {
           />
         )}
       </div>
+
+      {/* Assumptions Modal (#14) */}
+      {showAssumptionsModal && (
+        <div className="modal-backdrop" onClick={() => setShowAssumptionsModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <h3>ℹ️ Operations System Parameters & Assumptions</h3>
+            <div className="assumptions-list font-mono" style={{ fontSize: 12, marginTop: 12, lineHeight: 1.6 }}>
+              <div>• <strong>Fuel Consumption:</strong> 0.15 tons / km base rate per vessel.</div>
+              <div>• <strong>Adverse Weather Penalty:</strong> +30% fuel burn penalty in storm cells.</div>
+              <div>• <strong>Arrival Radius:</strong> 2.0 km threshold from target port.</div>
+              <div>• <strong>Proximity Alert Threshold:</strong> 2.0 km separation between vessels.</div>
+              <div>• <strong>Routing Engine:</strong> A* grid pathfinding on 0.3° resolution grid.</div>
+              <div>• <strong>Simulation Tick Rate:</strong> 1 Hz state update frequency.</div>
+              <div>• <strong>AI NLP Classifier:</strong> Multi-category emergency severity extraction.</div>
+            </div>
+            <div style={{ marginTop: 20, textAlign: 'right' }}>
+              <button className="btn btn-primary" onClick={() => setShowAssumptionsModal(false)}>
+                Close Assumptions
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

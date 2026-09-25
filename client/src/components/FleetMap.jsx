@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useMemo, useState, useCallback } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { createShipInterpolator } from '../utils/interpolation.js';
@@ -17,18 +17,15 @@ const STATUS_COLORS = {
   insufficient_fuel: '#f97316',
 };
 
-const OceanTileLayer = L.TileLayer.extend({
-  createTile(coords) {
+// Ocean Tile Layer
+const OceanCanvasLayer = L.TileLayer.extend({
+  createTile() {
     const tile = document.createElement('canvas');
     tile.width = 256;
     tile.height = 256;
     const ctx = tile.getContext('2d');
-    
-    // Deep Ocean Slate background
     ctx.fillStyle = '#050b14';
     ctx.fillRect(0, 0, 256, 256);
-    
-    // Subtle tactical grid lines
     ctx.strokeStyle = 'rgba(30, 58, 110, 0.25)';
     ctx.lineWidth = 0.5;
     for (let i = 0; i < 256; i += 32) {
@@ -41,13 +38,6 @@ const OceanTileLayer = L.TileLayer.extend({
       ctx.lineTo(i, 256);
       ctx.stroke();
     }
-    
-    // Subtle latitude/longitude crosshairs
-    ctx.strokeStyle = 'rgba(56, 189, 248, 0.08)';
-    ctx.beginPath();
-    ctx.arc(128, 128, 2, 0, Math.PI * 2);
-    ctx.stroke();
-    
     return tile;
   },
 });
@@ -65,13 +55,19 @@ export default function FleetMap({
   onSendDirective,
   onDistress,
   searchQuery = '',
-  statusFilter = 'all'
+  statusFilter = 'all',
+  playbackMode,
+  setPlaybackMode
 }) {
   const mapRef = useRef(null);
   const leafletMapRef = useRef(null);
+  const tileLayerRef = useRef(null);
   const markersRef = useRef(new Map());
   const routeLinesRef = useRef(new Map());
+  const trailLinesRef = useRef(new Map());
+  const proximityLinesRef = useRef(new Map());
   const zoneLayersRef = useRef(new Map());
+  const weatherLayersRef = useRef(new Map());
   const navigableLayerRef = useRef(null);
   const drawPointsRef = useRef([]);
   const drawLayerRef = useRef(null);
@@ -79,10 +75,12 @@ export default function FleetMap({
   const interpolatorRef = useRef(createShipInterpolator());
   const animFrameRef = useRef(null);
 
+  const [mapStyle, setMapStyle] = useState('dark'); // 'dark' | 'satellite' | 'canvas'
   const [drawPointCount, setDrawPointCount] = useState(0);
   const [contextZone, setContextZone] = useState(null);
+  const [zoomLevel, setZoomLevel] = useState(DEFAULT_ZOOM);
 
-  // Initialize Map
+  // Initialize Map & Tile Layer Switcher
   useEffect(() => {
     if (leafletMapRef.current || !mapRef.current) return;
 
@@ -96,12 +94,29 @@ export default function FleetMap({
       maxZoom: 14,
     });
 
-    // Custom Zoom Control at bottom right
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-    new OceanTileLayer('', { maxZoom: 14 }).addTo(map);
+    // Initial Tile Layer: CartoDB Dark Matter (Real World Map)
+    const darkTile = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+      subdomains: 'abcd',
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+    });
+    darkTile.addTo(map);
+    tileLayerRef.current = darkTile;
 
-    // Realistic Persian Gulf & Strait of Hormuz Shoreline Land Polygons
+    // Track Zoom level for hiding port labels at low zoom
+    map.on('zoomend', () => {
+      setZoomLevel(map.getZoom());
+    });
+
+    // Window Resize listener (Requirement #28)
+    const handleResize = () => {
+      if (leafletMapRef.current) leafletMapRef.current.invalidateSize();
+    };
+    window.addEventListener('resize', handleResize);
+
+    // Shoreline Land Polygons Fallback Layer
     const landPolygons = [
       [[30.5, 47.5], [30.5, 48.5], [29.8, 48.6], [29.5, 48.3], [28.5, 49.0], [27.5, 49.8],
        [26.5, 50.3], [26.4, 51.5], [25.3, 52.0], [24.8, 53.0], [25.3, 54.5], [26.0, 55.5],
@@ -115,9 +130,9 @@ export default function FleetMap({
     for (const poly of landPolygons) {
       L.polygon(poly, {
         color: '#0f172a',
-        weight: 1.5,
+        weight: 1,
         fillColor: '#090d16',
-        fillOpacity: 0.95,
+        fillOpacity: 0.4,
         interactive: false,
       }).addTo(map);
     }
@@ -125,10 +140,59 @@ export default function FleetMap({
     leafletMapRef.current = map;
 
     return () => {
+      window.removeEventListener('resize', handleResize);
       map.remove();
       leafletMapRef.current = null;
     };
   }, []);
+
+  // Map Tile Style Switcher (Real World Dark / Real World Satellite / Tactical Canvas)
+  useEffect(() => {
+    const map = leafletMapRef.current;
+    if (!map) return;
+    if (tileLayerRef.current) {
+      map.removeLayer(tileLayerRef.current);
+    }
+
+    if (mapStyle === 'satellite') {
+      tileLayerRef.current = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        maxZoom: 18,
+        attribution: 'Tiles &copy; Esri'
+      }).addTo(map);
+    } else if (mapStyle === 'dark') {
+      tileLayerRef.current = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        subdomains: 'abcd',
+        maxZoom: 19,
+        attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+      }).addTo(map);
+    } else {
+      tileLayerRef.current = new OceanCanvasLayer('', { maxZoom: 14 }).addTo(map);
+    }
+  }, [mapStyle]);
+
+  // Keyboard Shortcuts (Requirement #24)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+
+      if (e.code === 'Space') {
+        e.preventDefault();
+        setPlaybackMode(prev => !prev);
+      } else if (e.code === 'Escape') {
+        if (drawingMode) setDrawingMode(false);
+        if (selectedShip) onClose();
+        if (contextZone) setContextZone(null);
+      } else if (e.code === 'Delete' || e.code === 'Backspace') {
+        if (contextZone && role === 'command') {
+          onRemoveZone(contextZone.id);
+          setContextZone(null);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [drawingMode, selectedShip, contextZone, role, onClose, onRemoveZone, setDrawingMode, setPlaybackMode]);
 
   // Render Navigable Water Bounds
   useEffect(() => {
@@ -137,50 +201,52 @@ export default function FleetMap({
     if (navigableLayerRef.current) return;
     const nav = L.polygon(
       state.navigableWater.map(p => [p[0], p[1]]),
-      { color: '#38bdf8', weight: 1.2, fillColor: '#0284c7', fillOpacity: 0.08, dashArray: '6,6', interactive: false }
+      { color: '#38bdf8', weight: 1.2, fillColor: '#0284c7', fillOpacity: 0.06, dashArray: '6,6', interactive: false }
     ).addTo(map);
     navigableLayerRef.current = nav;
   }, [state?.navigableWater]);
 
-  // Render Port Markers
+  // Render Ports with Zoom Level Threshold (#20)
   useEffect(() => {
     const map = leafletMapRef.current;
     if (!map || !state?.ports) return;
     if (!map._portMarkers) map._portMarkers = new Map();
-    for (const port of state.ports) {
-      if (map._portMarkers.has(port.id)) continue;
-      
-      const portIcon = L.divIcon({
-        className: 'port-custom-marker',
-        html: `
-          <div class="port-ring"></div>
-          <div class="port-dot"></div>
-        `,
-        iconSize: [16, 16],
-        iconAnchor: [8, 8]
-      });
 
-      const marker = L.marker([port.position[0], port.position[1]], { icon: portIcon }).addTo(map);
+    const showPermanent = zoomLevel >= 7;
+
+    for (const port of state.ports) {
+      let marker = map._portMarkers.get(port.id);
+      if (!marker) {
+        const portIcon = L.divIcon({
+          className: 'port-custom-marker',
+          html: `<div class="port-ring"></div><div class="port-dot"></div>`,
+          iconSize: [16, 16],
+          iconAnchor: [8, 8]
+        });
+        marker = L.marker([port.position[0], port.position[1]], { icon: portIcon }).addTo(map);
+        map._portMarkers.set(port.id, marker);
+      }
+
+      marker.unbindTooltip();
       marker.bindTooltip(`
-        <div style="font-weight:700; color:#38bdf8; font-size:12px;">${port.name}</div>
+        <div style="font-weight:700; color:#38bdf8; font-size:12px;">⚓ ${port.name}</div>
         <div style="font-size:10px; color:#94a3b8;">Port ID: ${port.id}</div>
       `, {
-        permanent: true,
+        permanent: showPermanent,
         direction: 'top',
         className: 'port-label',
         offset: [0, -10],
       });
-      map._portMarkers.set(port.id, marker);
     }
-  }, [state?.ports]);
+  }, [state?.ports, zoomLevel]);
 
-  // Feed Ship Updates to Interpolator
+  // Feed Ships to Interpolator (#9)
   useEffect(() => {
     if (!state?.ships) return;
     interpolatorRef.current.update(state.ships, state.timestamp || Date.now());
   }, [state?.ships, state?.timestamp]);
 
-  // Render Ship Markers & Routes
+  // Render Ship Markers (#1) & Proximity Lines (#11) & Trails (#21) & Weather (#12)
   useEffect(() => {
     const map = leafletMapRef.current;
     if (!map || !state?.ships) return;
@@ -190,7 +256,7 @@ export default function FleetMap({
         ship.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         ship.shipId.toLowerCase().includes(searchQuery.toLowerCase()) ||
         ship.cargo.toLowerCase().includes(searchQuery.toLowerCase());
-      
+
       const matchesStatus = statusFilter === 'all' || 
         (statusFilter === 'distressed' && (ship.status === 'distressed' || ship.status === 'stranded')) ||
         (statusFilter === 'rerouting' && ship.status === 'rerouting') ||
@@ -209,18 +275,17 @@ export default function FleetMap({
         map.removeLayer(marker);
         markersRef.current.delete(id);
         const rl = routeLinesRef.current.get(id);
-        if (rl) {
-          map.removeLayer(rl);
-          routeLinesRef.current.delete(id);
-        }
+        if (rl) { map.removeLayer(rl); routeLinesRef.current.delete(id); }
+        const tr = trailLinesRef.current.get(id);
+        if (tr) { map.removeLayer(tr); trailLinesRef.current.delete(id); }
       }
     }
 
+    // Render Vessels
     for (const ship of filteredShips) {
       let marker = markersRef.current.get(ship.shipId);
       const color = STATUS_COLORS[ship.status] || '#10b981';
       const isSelected = selectedShip === ship.shipId;
-
       const iconHtml = createShipIcon(ship, color, isSelected);
 
       if (!marker) {
@@ -230,18 +295,26 @@ export default function FleetMap({
           iconSize: [32, 32],
           iconAnchor: [16, 16],
         });
-        marker = L.marker([ship.position[0], ship.position[1]], { icon, zIndexOffset: isSelected ? 1000 : 100 });
+
+        marker = L.marker([ship.position[0], ship.position[1]], {
+          icon,
+          zIndexOffset: isSelected ? 1000 : 100,
+          keyboard: true,
+          title: `${ship.name} (${ship.shipId})`
+        });
+
         marker.addTo(map);
+
         marker.on('click', () => {
           onSelectShip(ship.shipId);
           map.flyTo([ship.position[0], ship.position[1]], Math.max(map.getZoom(), 8), { duration: 0.8 });
         });
-        
-        // Tooltip on Hover
+
         marker.bindTooltip(`
-          <div style="font-weight:700; color:#f8fafc; font-size:12px;">${ship.name} (${ship.shipId})</div>
-          <div style="font-size:11px; color:${color}; text-transform:uppercase; font-weight:600;">STATUS: ${ship.status}</div>
+          <div style="font-weight:700; color:#f8fafc; font-size:12px;">🚢 ${ship.name} (${ship.shipId})</div>
+          <div style="font-size:11px; color:${color}; text-transform:uppercase; font-weight:700;">STATUS: ${ship.status.replace('_', ' ')}</div>
           <div style="font-size:11px; color:#cbd5e1;">Speed: ${ship.speed} kn | Fuel: ${ship.fuel?.toFixed(0)}t</div>
+          <div style="font-size:10px; color:#94a3b8;">Destination: ${ship.destination}</div>
         `, { direction: 'right', offset: [14, 0], className: 'ship-hover-tooltip' });
 
         markersRef.current.set(ship.shipId, marker);
@@ -255,7 +328,7 @@ export default function FleetMap({
         marker.setZIndexOffset(isSelected ? 1000 : 100);
       }
 
-      // Render Route Lines
+      // Render Planned Route Lines
       let routeLine = routeLinesRef.current.get(ship.shipId);
       if (ship.route && ship.route.length > 1 && (isSelected || role === 'command')) {
         const latlngs = ship.route.map(p => [p[0], p[1]]);
@@ -278,10 +351,97 @@ export default function FleetMap({
         map.removeLayer(routeLine);
         routeLinesRef.current.delete(ship.shipId);
       }
+
+      // Render Selected Ship Position Trail (#21)
+      let trailLine = trailLinesRef.current.get(ship.shipId);
+      if (isSelected && ship.positionHistory && ship.positionHistory.length > 1) {
+        const trailLatLngs = ship.positionHistory.map(p => [p[0], p[1]]);
+        if (trailLine) {
+          trailLine.setLatLngs(trailLatLngs);
+        } else {
+          trailLine = L.polyline(trailLatLngs, {
+            color: '#06b6d4',
+            weight: 2,
+            dashArray: '3,3',
+            opacity: 0.85
+          }).addTo(map);
+          trailLinesRef.current.set(ship.shipId, trailLine);
+        }
+      } else if (trailLine && !isSelected) {
+        map.removeLayer(trailLine);
+        trailLinesRef.current.delete(ship.shipId);
+      }
+
+      // Render Weather Radar Overlay for Adverse Ships (#12)
+      let wLayer = weatherLayersRef.current.get(ship.shipId);
+      if (ship.weather?.adverse) {
+        if (!wLayer) {
+          wLayer = L.circle([ship.position[0], ship.position[1]], {
+            radius: 12000,
+            color: '#f59e0b',
+            fillColor: '#f59e0b',
+            fillOpacity: 0.15,
+            weight: 1,
+            dashArray: '4,4'
+          }).addTo(map);
+          wLayer.bindTooltip('🌧️ Storm / Adverse Weather Cell', { sticky: true });
+          weatherLayersRef.current.set(ship.shipId, wLayer);
+        } else {
+          wLayer.setLatLng([ship.position[0], ship.position[1]]);
+        }
+      } else if (wLayer) {
+        map.removeLayer(wLayer);
+        weatherLayersRef.current.delete(ship.shipId);
+      }
     }
+
+    // Render Proximity Warning Lines (#11)
+    const proximityPairs = new Set();
+    const shipsList = filteredShips;
+    for (let i = 0; i < shipsList.length; i++) {
+      for (let j = i + 1; j < shipsList.length; j++) {
+        const s1 = shipsList[i];
+        const s2 = shipsList[j];
+        if (s1.status === 'arrived' || s2.status === 'arrived') continue;
+        
+        const dLat = s2.position[0] - s1.position[0];
+        const dLng = s2.position[1] - s1.position[1];
+        const km = Math.sqrt(dLat * dLat + dLng * dLng) * 111;
+
+        if (km <= 2.0) {
+          const pairId = [s1.shipId, s2.shipId].sort().join('-');
+          proximityPairs.add(pairId);
+
+          let pLine = proximityLinesRef.current.get(pairId);
+          const linePos = [[s1.position[0], s1.position[1]], [s2.position[0], s2.position[1]]];
+
+          if (pLine) {
+            pLine.setLatLngs(linePos);
+          } else {
+            pLine = L.polyline(linePos, {
+              color: '#ef4444',
+              weight: 2.5,
+              dashArray: '6,6',
+              className: 'proximity-line-pulse'
+            }).addTo(map);
+            pLine.bindTooltip(`⚠️ Proximity Alert (${km.toFixed(2)}km)`, { sticky: true });
+            proximityLinesRef.current.set(pairId, pLine);
+          }
+        }
+      }
+    }
+
+    // Clear resolved proximity lines
+    for (const [pairId, pLine] of proximityLinesRef.current) {
+      if (!proximityPairs.has(pairId)) {
+        map.removeLayer(pLine);
+        proximityLinesRef.current.delete(pairId);
+      }
+    }
+
   }, [state?.ships, selectedShip, role, onSelectShip, searchQuery, statusFilter]);
 
-  // Render Restricted Zones
+  // Render Restricted Zones with Centroid Tooltips (#22)
   useEffect(() => {
     const map = leafletMapRef.current;
     if (!map) return;
@@ -299,26 +459,24 @@ export default function FleetMap({
       if (zoneLayersRef.current.has(zone.id)) continue;
       const polygon = L.polygon(
         zone.polygon.map(p => [p[0], p[1]]),
-        { color: '#ef4444', weight: 2, fillColor: '#ef4444', fillOpacity: 0.22, dashArray: '6,6' }
+        { color: '#ef4444', weight: 2.5, fillColor: '#dc2626', fillOpacity: 0.25, dashArray: '6,6' }
       ).addTo(map);
-      
+
       polygon.bindTooltip(`
-        <div style="font-weight:700; color:#f8fafc; font-size:12px;">🚫 ${zone.name}</div>
-        <div style="font-size:10px; color:#fca5a5;">Restricted Red Zone</div>
+        <div style="font-weight:800; color:#ffffff; font-size:12px;">🚫 ${zone.name}</div>
+        <div style="font-size:10px; color:#fca5a5;">Restricted Red Zone (Click to inspect)</div>
       `, { sticky: true, className: 'zone-tooltip' });
 
       polygon.on('click', (e) => {
         L.DomEvent.stopPropagation(e);
-        if (role === 'command') {
-          setContextZone(zone);
-        }
+        setContextZone(zone);
       });
 
       zoneLayersRef.current.set(zone.id, polygon);
     }
-  }, [state?.restrictedZones, role]);
+  }, [state?.restrictedZones]);
 
-  // Handle Interactive Polygon Drawing Mode
+  // Handle Interactive Polygon Drawing Mode (#2)
   useEffect(() => {
     const map = leafletMapRef.current;
     if (!map) return;
@@ -404,7 +562,7 @@ export default function FleetMap({
     };
   }, [drawingMode, onAddZone, setDrawingMode]);
 
-  // Smooth Interpolation Animation Loop (Position + Heading)
+  // Smooth Interpolation Animation Loop (#9)
   useEffect(() => {
     const animate = () => {
       const now = Date.now();
@@ -464,42 +622,97 @@ export default function FleetMap({
           100% { transform: scale(1.8); opacity: 0; }
         }
         .port-label {
-          background: rgba(15, 23, 42, 0.9) !important;
+          background: rgba(15, 23, 42, 0.92) !important;
           border: 1px solid rgba(56, 189, 248, 0.3) !important;
           color: #38bdf8 !important;
           font-size: 11px !important;
-          font-weight: 600 !important;
+          font-weight: 700 !important;
           padding: 3px 8px !important;
           border-radius: 6px !important;
           box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
           backdrop-filter: blur(8px);
         }
         .ship-hover-tooltip {
-          background: rgba(15, 23, 42, 0.92) !important;
-          border: 1px solid rgba(148, 163, 184, 0.2) !important;
+          background: rgba(15, 23, 42, 0.94) !important;
+          border: 1px solid rgba(148, 163, 184, 0.25) !important;
           padding: 8px 12px !important;
           border-radius: 8px !important;
           box-shadow: 0 8px 24px rgba(0,0,0,0.6) !important;
         }
         .zone-tooltip {
-          background: rgba(239, 68, 68, 0.9) !important;
+          background: rgba(220, 38, 38, 0.95) !important;
           border: 1px solid #ef4444 !important;
           color: #fff !important;
           border-radius: 6px !important;
+        }
+        .proximity-line-pulse {
+          animation: pulse-glow 1.2s ease-in-out infinite;
+        }
+        .map-style-selector {
+          position: absolute;
+          bottom: 24px;
+          right: 60px;
+          z-index: 1000;
+          display: flex;
+          gap: 4px;
+          background: rgba(11, 19, 41, 0.9);
+          border: 1px solid var(--border-light);
+          padding: 4px;
+          border-radius: 8px;
+          backdrop-filter: blur(12px);
+        }
+        .style-btn {
+          padding: 4px 8px;
+          font-size: 11px;
+          font-weight: 600;
+          border: none;
+          background: none;
+          color: var(--text-muted);
+          border-radius: 4px;
+          cursor: pointer;
+        }
+        .style-btn.active {
+          background: var(--accent);
+          color: #050914;
         }
       `}</style>
       
       <div ref={mapRef} style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }} />
 
-      {/* Interactive Drawing Banner */}
+      {/* Map Tile Switcher (Real World Map Tiles) */}
+      <div className="map-style-selector">
+        <button 
+          className={`style-btn ${mapStyle === 'dark' ? 'active' : ''}`}
+          onClick={() => setMapStyle('dark')}
+          title="Real-World Dark Carto Map"
+        >
+          🗺️ Dark Map
+        </button>
+        <button 
+          className={`style-btn ${mapStyle === 'satellite' ? 'active' : ''}`}
+          onClick={() => setMapStyle('satellite')}
+          title="Real-World Satellite Imagery"
+        >
+          🛰️ Satellite
+        </button>
+        <button 
+          className={`style-btn ${mapStyle === 'canvas' ? 'active' : ''}`}
+          onClick={() => setMapStyle('canvas')}
+          title="Tactical Ocean Grid"
+        >
+          🌐 Radar Grid
+        </button>
+      </div>
+
+      {/* Interactive Drawing Mode Banner (#2) */}
       {drawingMode && (
-        <div className="drawing-banner">
+        <div className="drawing-banner animate-slide-up">
           <span>✏️ Drawing Restricted Zone Mode Active</span>
-          <span style={{ fontSize: 12, opacity: 0.8, marginLeft: 8 }}>
-            Click map to add points ({drawPointCount} points). Double click to complete.
+          <span style={{ fontSize: 12, opacity: 0.9, marginLeft: 8 }}>
+            Click map for vertices ({drawPointCount} points). Double click to close polygon.
           </span>
           <button className="btn btn-sm btn-danger" onClick={() => setDrawingMode(false)} style={{ marginLeft: 12 }}>
-            Cancel
+            Cancel (Esc)
           </button>
         </div>
       )}
@@ -509,14 +722,16 @@ export default function FleetMap({
         <div className="modal-backdrop" onClick={() => setContextZone(null)}>
           <div className="modal-content" onClick={e => e.stopPropagation()}>
             <h3>🚫 {contextZone.name}</h3>
-            <p>This is an active restricted red zone in the Strait of Hormuz.</p>
+            <p>Designated High-Risk Restricted Red Zone in the Strait of Hormuz.</p>
             <div style={{ display: 'flex', gap: 12, marginTop: 16 }}>
-              <button className="btn btn-danger" onClick={() => {
-                onRemoveZone(contextZone.id);
-                setContextZone(null);
-              }}>
-                Remove Restricted Zone
-              </button>
+              {role === 'command' && (
+                <button className="btn btn-danger" onClick={() => {
+                  onRemoveZone(contextZone.id);
+                  setContextZone(null);
+                }}>
+                  🗑️ Remove Zone (Del)
+                </button>
+              )}
               <button className="btn btn-secondary" onClick={() => setContextZone(null)}>
                 Close
               </button>
@@ -525,15 +740,15 @@ export default function FleetMap({
         </div>
       )}
 
-      {/* Telemetry HUD Overlay when Ship Selected */}
+      {/* Telemetry HUD Overlay when Ship Selected (#8, #12, #21) */}
       {selectedShipData && (
         <div className="ship-detail-overlay animate-slide-up">
-          <button className="close-btn" onClick={onClose}>&times;</button>
+          <button className="close-btn" onClick={onClose} aria-label="Close ship detail overlay">&times;</button>
           
           <div className="overlay-header">
             <div>
               <h2>{selectedShipData.name}</h2>
-              <span className="ship-id-badge">{selectedShipData.shipId}</span>
+              <span className="ship-id-badge font-mono">{selectedShipData.shipId}</span>
             </div>
             <span className={`status-badge status-${selectedShipData.status}`}>
               {selectedShipData.status.replace('_', ' ')}
@@ -573,15 +788,15 @@ export default function FleetMap({
             </div>
           </div>
 
-          {/* Weather Status */}
+          {/* Weather Status (#12) */}
           <div className="weather-card-container">
             <span className="label">Current Weather:</span>
             {selectedShipData.weather ? (
               <span className={`weather-badge ${selectedShipData.weather.adverse ? 'adverse' : 'clear'}`}>
-                {selectedShipData.weather.adverse ? '⚠️ Storm Warning' : '☀️ Clear Water'} &middot; {selectedShipData.weather.description}
+                {selectedShipData.weather.adverse ? '⚠️ Storm Cell Alert' : '☀️ Clear Sea'} &middot; {selectedShipData.weather.description}
                 {selectedShipData.weather.adverse && ' (+30% Fuel Penalty)'}
               </span>
-            ) : <span style={{ fontSize: 12, color: '#94a3b8' }}>Weather data active</span>}
+            ) : <span style={{ fontSize: 12, color: '#94a3b8' }}>Weather active</span>}
           </div>
 
           <div className="detail-row">
@@ -634,7 +849,12 @@ function createShipIcon(ship, color, selected) {
   const size = selected ? 32 : 24;
   const rotation = ship.heading || 0;
   return `
-    <div style="width:${size}px; height:${size}px; display:flex; align-items:center; justify-content:center; position:relative;">
+    <div 
+      tabindex="0"
+      role="button"
+      aria-label="Vessel ${ship.name} ID ${ship.shipId} Status ${ship.status}"
+      style="width:${size}px; height:${size}px; display:flex; align-items:center; justify-content:center; position:relative; outline:none;"
+    >
       ${selected ? `<div style="position:absolute; inset:-4px; border:2px solid ${color}; border-radius:50%; animation:ping 1.5s cubic-bezier(0,0,0.2,1) infinite; opacity:0.7;"></div>` : ''}
       <svg width="${size}" height="${size}" viewBox="0 0 24 24" style="transform:rotate(${rotation}deg); filter:drop-shadow(0 0 ${selected ? 8 : 4}px ${color}); transition:transform 0.2s ease-out;">
         <path d="M12 2 L7 21 L12 17 L17 21 Z" fill="${color}" stroke="${selected ? '#ffffff' : '#0f172a'}" stroke-width="${selected ? 1.5 : 1}"/>
